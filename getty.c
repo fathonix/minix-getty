@@ -59,7 +59,7 @@
 /*
  * Read one character from stdin.
  */
-static int readch(char *tty)
+static int readch(int fd, char *tty)
 {
 	int st;
 	char ch1;
@@ -67,7 +67,7 @@ static int readch(char *tty)
 	/*
 	 * read character from TTY
 	 */
-	st = read(STDIN_FILENO, &ch1, 1);
+	st = read(fd, &ch1, 1);
 	if (st == 0) {
 		print("\n");
 		exit(0);
@@ -79,31 +79,31 @@ static int readch(char *tty)
 	return ch1 & 0xFF;
 }
 
-static void stty(speed_t speed)
+static void stty(int fd, speed_t speed)
 {
 	struct termios term;
 
-	tcdrain(STDIN_FILENO);
-	if (tcgetattr(STDIN_FILENO, &term))
+	tcdrain(fd);
+	if (tcgetattr(fd, &term))
 		return;
 
 	cfsetispeed(&term, speed);
 	cfsetospeed(&term, speed);
-	tcsetattr(STDIN_FILENO, TCSAFLUSH, &term);
-	tcflush(STDIN_FILENO, TCIOFLUSH);
+	tcsetattr(fd, TCSAFLUSH, &term);
+	tcflush(fd, TCIOFLUSH);
 }
 
 /*
  * Parse and display a line from /etc/issue
  */
-static void parse(char *line, struct utsname *uts, char *tty)
+static void parse(char *line, struct utsname *uts, char *tty, int fd)
 {
 	char *s, *s0;
 
 	s0 = line;
 	for (s = line; *s != 0; s++) {
 		if (*s == '\\') {
-			write(STDOUT_FILENO, s0, s - s0);
+			write(fd, s0, s - s0);
 			s0 = s + 2;
 			switch (*++s) {
 			case 'l':
@@ -144,7 +144,7 @@ leave:
 /*
  * Parse and display /etc/issue
  */
-static void issue(char *tty)
+static void issue(char *tty, int fd)
 {
 	FILE *fp;
 	char buf[BUFSIZ] = "Welcome to \\s \\v \\n \\l\n\n";
@@ -159,29 +159,23 @@ static void issue(char *tty)
 	fp = fopen("/etc/issue", "r");
 	if (fp) {
 		while (fgets(buf, sizeof(buf), fp))
-			parse(buf, &uts, tty);
+			parse(buf, &uts, tty, fd);
 
 		fclose(fp);
 	} else {
-		parse(buf, &uts, tty);
+		parse(buf, &uts, tty, fd);
 	}
 
-	parse("\\n login: ", &uts, tty);
+	parse("\\n login: ", &uts, tty, fd);
 }
 
 /*
  * Handle the process of a GETTY.
  */
-static void getty(char *tty, char *name, size_t len)
+static void getty(int fd, char *tty, char *name, size_t len)
 {
 	int ch;
 	char *np;
-
-	/*
-	 * Clean up tty name.
-	 */
-	if (!strncmp(tty, _PATH_DEV, strlen(_PATH_DEV)))
-		tty += 5;
 
 	/*
 	 * Display prompt.
@@ -189,13 +183,13 @@ static void getty(char *tty, char *name, size_t len)
 	ch = ' ';
 	*name = '\0';
 	while (ch != '\n') {
-		issue(tty);
+		issue(tty, fd);
 
 		np = name;
-		while ((ch = readch(tty)) != '\n') {
+		while ((ch = readch(fd, tty)) != '\n') {
 			if (ch == CTL('U')) {
 				while (np > name) {
-					write(STDOUT_FILENO, "\b \b", 3);
+					write(fd, "\b \b", 3);
 					np--;
 				}
 				continue;
@@ -239,7 +233,7 @@ static int login(char *name)
 
 static int usage(int code)
 {
-	print("Usage: getty [-h] [SPEED]\n");
+	print("Usage: getty [-h] [SPEED] [TTY]\n");
 	return code;
 }
 
@@ -298,12 +292,23 @@ static speed_t parse_speed(char *baud)
 int main(int argc, char **argv)
 {
 	char name[30], *tty;
+	int fd;
 	speed_t speed = B38400;
 	struct sigaction sa;
 
 	if (argc > 1) {
 		if (!strcmp(argv[1], "-h"))
 			return usage(0);
+
+		if (argc > 2) {
+			char ttyn[30];
+
+			strncpy(ttyn, _PATH_DEV, sizeof(ttyn));
+			strncat(ttyn, argv[2], sizeof(ttyn) - strlen(ttyn) - 1);
+			fd = open(&ttyn[0], O_RDWR);
+		} else {
+			fd = STDIN_FILENO;
+		}
 
 		speed = parse_speed(argv[1]);
 		if (speed == B0) {
@@ -323,18 +328,24 @@ int main(int argc, char **argv)
 	sigaction(SIGINT,  &sa, NULL);
 	sigaction(SIGQUIT, &sa, NULL);
 
-	tty = ttyname(0);
+	tty = ttyname(fd);
 	if (!tty) {
-		warnx("getty: unknown TTY\n");
+		warnx("unknown TTY\n");
 		pause();
 		return 1;
 	}
 
 	/*
+	 * Clean up tty name.
+	 */
+	if (!strncmp(tty, _PATH_DEV, strlen(_PATH_DEV)))
+		tty += 5;
+
+	/*
 	 * Prepare line, read username and call login
 	 */
-	stty(speed);
-	getty(tty, name, sizeof(name));
+	stty(fd, speed);
+	getty(fd, tty, name, sizeof(name));
 
 	return login(name);
 }
