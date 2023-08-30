@@ -305,9 +305,13 @@ int main(int argc, char **argv)
 
 			strncpy(ttyn, _PATH_DEV, sizeof(ttyn));
 			strncat(ttyn, argv[2], sizeof(ttyn) - strlen(ttyn) - 1);
-			fd = open(&ttyn[0], O_RDWR);
+			tty = &ttyn[0];
+			fd = open(tty, O_RDWR);
 		} else {
 			fd = STDIN_FILENO;
+			tty = ttyname(fd);
+			if (!strncmp(tty, _PATH_DEV, strlen(_PATH_DEV)))
+				tty += 5;
 		}
 
 		speed = parse_speed(argv[1]);
@@ -328,18 +332,11 @@ int main(int argc, char **argv)
 	sigaction(SIGINT,  &sa, NULL);
 	sigaction(SIGQUIT, &sa, NULL);
 
-	tty = ttyname(fd);
 	if (!tty) {
 		warnx("unknown TTY\n");
 		pause();
 		return 1;
 	}
-
-	/*
-	 * Clean up tty name.
-	 */
-	if (!strncmp(tty, _PATH_DEV, strlen(_PATH_DEV)))
-		tty += 5;
 
 	/*
 	 * Prepare line, read username and call login
